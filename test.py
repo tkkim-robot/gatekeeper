@@ -16,9 +16,6 @@ class DoubleIntegrator2D:
             X: [x, y, vx, vy]
             theta: yaw angle
             U: [ax, ay]
-            U_attitude: [yaw_rate]
-            cbf: h(x) = ||x-x_obs||^2 - beta*d_min^2
-            relative degree: 2
         '''
         self.dt = dt
         self.robot_spec = robot_spec
@@ -89,76 +86,118 @@ class DoubleIntegrator2D:
 
     def has_stopped(self, X, tol=0.05):
         return np.linalg.norm(X[2:4, 0]) < tol
-    
 
+class BaseRobot:
+
+    def __init__(self, X0, robot_spec, dt, ax):
+        self.X = X0.reshape(-1, 1)
+        self.dt = dt
+        self.robot_spec = robot_spec
+        colors = plt.colormaps.get_cmap('Pastel1').colors  # color palette
+
+        color = colors[self.robot_spec['robot_id'] % len(colors) + 1]
+
+        if 'radius' not in self.robot_spec:
+            self.robot_spec['radius'] = 0.25
+        self.robot_radius = self.robot_spec['radius']  # including padding
+        self.robot = DoubleIntegrator2D(dt, robot_spec)
+
+        self.U = np.array([0, 0]).reshape(-1, 1)
+        # Plot handles
+        self.vis_orient_len = 0.5
+        self.body = ax.add_patch(plt.Circle(
+            (0, 0), self.robot_radius, edgecolor='black', facecolor=color, fill=True))
+
+        # Robot's orientation axis represented as a line
+        self.axis,  = ax.plot([self.X[0, 0], self.X[0, 0]], [
+                      self.X[1, 0], self.X[1, 0]], color='r', linewidth=2)
+
+    def get_position(self):
+        return self.X[0:2].reshape(-1)
+    
+    def f(self):
+        return self.robot.f(self.X)
+
+    def g(self):
+        return self.robot.g(self.X)
+
+    def nominal_input(self, goal, d_min=0.05, k_omega = 2.0, k_a = 1.0, k_v = 1.0):
+        return self.robot.nominal_input(self.X, goal, d_min, k_v, k_a)
+
+    def stop(self):
+        return self.robot.stop(self.X)
+
+    def has_stopped(self):
+        return self.robot.has_stopped(self.X)
+    
+    def step(self, U):
+        # wrap step function
+        self.U = U.reshape(-1, 1)
+        self.X = self.robot.step(self.X, self.U)
+        return self.X
+
+    def render_plot(self):
+        self.body.center = self.X[0, 0], self.X[1, 0]
+
+        self.axis.set_ydata([self.X[1, 0], self.X[1, 0]])
+        self.axis.set_xdata([self.X[0, 0], self.X[0, 0] ])
 
 # Test simulation using the Gatekeeper controller.
 if __name__ == "__main__":
+    from gatekeeper import Gatekeeper
     plt.ion()
-    fig = plt.figure()
+    fig = plt.figure(figsize=(8, 8))
     ax = plt.axes()
     ax.set_xlabel("X")
     ax.set_ylabel("Y")
     ax.set_aspect(1)
+    ax.set_xlim(-1, 12)
+    ax.set_ylim(-1, 12)
 
-    dt = 0.02
+    dt = 0.05
     tf = 20
     num_steps = int(tf / dt)
 
-    # Define an obstacle (for visualization only).
+    # Define an obstacle for visualization.
     obstacle_center = np.array([5.0, 5.0])
     obstacle_radius = 1.0
+    nearest_obs = np.array([[5, 5, 1]])
 
     # Set start and goal positions.
-    initial_state = [0.0, 0.0, 0.0, 0.0]  # Start at rest.
-    goal = [10.0, 10.0]
+    initial_state = np.array([0.0, 0.0, 0.0, 0.0]).reshape(-1, 1)
+    goal = np.array([10.0, 10.0]).reshape(-1, 1)
 
     # Create robot_spec and initialize the double integrator.
-    robot_spec = {"model": "DoubleIntegrator2D"}
-    robot = DoubleIntegrator2D(dt, robot_spec)
+    robot_spec = {"model": "DoubleIntegrator2D", "robot_id": 1, "radius": 0.25}
+    robot = BaseRobot(initial_state, robot_spec, dt, ax)
 
-    # Import and instantiate the Gatekeeper controller.
-    from gatekeeper import Gatekeeper
-    gatekeeper_controller = Gatekeeper(robot, dt=dt, candidate_horizon=2.0, event_offset=0.05)
-
-    # Create and plot the robot body (a circle) and an orientation indicator.
-    body = ax.add_patch(plt.Circle((robot.X[0, 0], robot.X[1, 0]), robot.robot_radius,
-                                   edgecolor='black', facecolor='blue', fill=True))
-    orient_line, = ax.plot([robot.X[0, 0], robot.X[0, 0] + robot.vis_orient_len * np.cos(robot.yaw)],
-                             [robot.X[1, 0], robot.X[1, 0] + robot.vis_orient_len * np.sin(robot.yaw)], 'r-')
+    # Instantiate Gatekeeper controller.
+    gk = Gatekeeper(robot, dt=dt, nominal_horizon=2.0, backup_horizon=2.0)
+    # Set the nominal and backup controllers.
+    gk._set_nominal_controller(robot.robot.nominal_input)
+    gk._set_backup_controller(robot.robot.stop)
+    
+    # Control reference dictionary.
+    control_ref = {'goal': goal, 'state_machine': 'track', 'u_ref': np.zeros((2, 1))}
 
     # Simulation loop.
     for step in range(num_steps):
-        current_time = step * dt
-        current_state = robot.X
-
-        # Get control input from the Gatekeeper controller.
-        control_input = gatekeeper_controller.solve_control_problem(current_state, current_time)
-
-        # Override to stop if near the goal.
-        if np.linalg.norm(robot.X[0:2, 0] - np.array(goal)) < 0.5:
-            control_input = robot.stop(current_state)
+        # Get control input from Gatekeeper.
+        u = gk.solve_control_problem(robot.X, control_ref, nearest_obs)
+        # Update the robot's state.
+        robot.step(u)
+        # Render the updated robot state.
+        robot.render_plot()
         
-        # Update the robot state.
-        robot.update_state(control_input)
-
-        # Update visualization.
-        body.center = (robot.X[0, 0], robot.X[1, 0])
-        orient_line.set_xdata([robot.X[0, 0],
-                               robot.X[0, 0] + robot.vis_orient_len * np.cos(robot.yaw)])
-        orient_line.set_ydata([robot.X[1, 0],
-                               robot.X[1, 0] + robot.vis_orient_len * np.sin(robot.yaw)])
-
-        # Plot the obstacle.
-        # (For simplicity we add the obstacle patch at each iteration;
-        # in a more efficient implementation, add it once.)
-        obstacle_circle = plt.Circle((obstacle_center[0], obstacle_center[1]), obstacle_radius,
-                                     edgecolor='red', facecolor='none', linestyle='--')
-        ax.add_patch(obstacle_circle)
-
+        # (Optional) Draw the obstacle once. To avoid redrawing multiple times, we draw it in the first iteration.
+        if step == 0:
+            obstacle_patch = plt.Circle((obstacle_center[0], obstacle_center[1]), obstacle_radius,
+                                          edgecolor='red', facecolor='none', linestyle='--')
+            ax.add_patch(obstacle_patch)
+        
         plt.pause(0.001)
-        ax.figure.canvas.draw()
-        ax.figure.canvas.flush_events()
-
+        fig.canvas.draw()
+        fig.canvas.flush_events()
+    
     plt.ioff()
     plt.show()

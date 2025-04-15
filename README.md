@@ -1,5 +1,11 @@
 # gatekeeper
 
+### Installation
+Install packages
+```bash
+python -m pip install numpy scipy matplotlib
+```
+
 ```python
 from gatekeeper import Gatekeeper
 from robots.robot import BaseRobot  # your base robot class
