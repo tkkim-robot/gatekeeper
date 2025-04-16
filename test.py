@@ -155,7 +155,7 @@ if __name__ == "__main__":
     ax.set_ylim(-1, 12)
 
     dt = 0.05
-    tf = 20
+    tf = 100
     num_steps = int(tf / dt)
 
     # Define an obstacle for visualization.
@@ -168,11 +168,14 @@ if __name__ == "__main__":
     goal = np.array([10.0, 10.0]).reshape(-1, 1)
 
     # Create robot_spec and initialize the double integrator.
-    robot_spec = {"model": "DoubleIntegrator2D", "robot_id": 1, "radius": 0.25}
+    robot_spec = {"model": "DoubleIntegrator2D",
+                  "robot_id": 1,
+                  "radius": 0.25,
+                  "v_max": 3.0}
     robot = BaseRobot(initial_state, robot_spec, dt, ax)
 
     # Instantiate Gatekeeper controller.
-    gk = Gatekeeper(robot, dt=dt, nominal_horizon=2.0, backup_horizon=2.0)
+    gk = Gatekeeper(robot, dt=dt, nominal_horizon=2.0, backup_horizon=4.0, event_offset=1.0)
     # Set the nominal and backup controllers.
     gk._set_nominal_controller(robot.robot.nominal_input)
     gk._set_backup_controller(robot.robot.stop)

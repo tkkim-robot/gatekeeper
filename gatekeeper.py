@@ -19,7 +19,7 @@ from scipy.integrate import solve_ivp
 
 
 class Gatekeeper:
-    def __init__(self, robot, dt=0.05, nominal_horizon=2.0, backup_horizon=2.0):
+    def __init__(self, robot, dt=0.05, nominal_horizon=2.0, backup_horizon=2.0, event_offset=1.0):
         """
         Initialize the Gatekeeper controller.
 
@@ -48,7 +48,7 @@ class Gatekeeper:
         self.dt = dt
         self.nominal_horizon = nominal_horizon
         self.backup_horizon = backup_horizon
-        self.event_offset = 1.0
+        self.event_offset = event_offset
 
         self.nominal_controller = None
         self.backup_controller = None
@@ -56,6 +56,10 @@ class Gatekeeper:
         self.last_event_time = 0.0
         self.next_event_time = self.last_event_time
         self.current_time_idx = 0
+
+        # Initialize the committed trajectory
+        self.committed_x_traj = None
+        self.committed_u_traj = None
 
     def _dynamics(self, x, u):
         x_col = np.array(x).reshape(-1, 1)
@@ -93,7 +97,8 @@ class Gatekeeper:
         x_traj = sol.y.T
         #print("x_traj", x_traj, x_traj.shape)
         # Now compute the control trajectory by applying the nominal controller to each state.
-        u_traj = [self.nominal_controller(np.array(x).reshape(-1,1), goal) for x in x_traj]
+        u_traj = [self.nominal_controller(np.array(x).reshape(-1,1), goal).squeeze() for x in x_traj]
+        u_traj = np.array(u_traj) # (n_traj, n_u)
         return x_traj, u_traj
 
     def _generate_backup_trajectory(self, initial_state, goal, horizon):
@@ -107,8 +112,9 @@ class Gatekeeper:
             return self._dynamics(x, u)
 
         sol = solve_ivp(f_backup, [0, horizon], initial_state.flatten(), t_eval=t_eval, vectorized=False)
-        x_traj = sol.y.T
-        u_traj = [self.backup_controller(np.array(x).reshape(-1,1)) for x in x_traj]
+        x_traj = sol.y.T[1:]  # Exclude the state at backup time (duplicate from nominal)
+        u_traj = [self.backup_controller(np.array(x).reshape(-1,1)).squeeze() for x in x_traj]
+        u_traj = np.array(u_traj)
         return x_traj, u_traj
         
     def _generate_candidate_trajectory(self, goal):
@@ -121,12 +127,14 @@ class Gatekeeper:
             current_state = self.robot.X
 
             nominal_x_traj, nominal_u_traj = self._generate_nominal_trajectory(current_state, goal, self.nominal_horizon)
-            backup_x_traj, backup_u_traj = self._generate_backup_trajectory(current_state, goal, self.backup_horizon)
+            state_at_backup = nominal_x_traj[-1]  # last state of the nominal trajectory
+            backup_x_traj, backup_u_traj = self._generate_backup_trajectory(state_at_backup, goal, self.backup_horizon)
 
-            # Combine both trajectories into a single candidate trajectory
-            self.candidate_x_traj = nominal_x_traj + backup_x_traj
-            self.candidate_u_traj = nominal_u_traj + backup_u_traj
-            #print("candidate_x_traj", self.candidate_x_traj)
+            self.candidate_x_traj = np.vstack((nominal_x_traj, backup_x_traj))
+            self.candidate_u_traj = np.vstack((nominal_u_traj, backup_u_traj))
+            # print("nominal_x_traj", nominal_x_traj)
+            # print("backup_x_traj", backup_x_traj)
+            # print("candidate_x_traj", self.candidate_x_traj)
             return self.candidate_x_traj
 
     def _is_collision(self, state, obs):
@@ -177,17 +185,26 @@ class Gatekeeper:
             # if outer loop is doing something else, just return the reference
             return control_ref['u_ref']
         
+        if self.committed_x_traj is None and self.committed_u_traj is None:
+            # initialize the committed trajectory
+            init_x_traj, init_u_traj = self._generate_backup_trajectory(robot_state, goal, self.backup_horizon)   
+            self.committed_x_traj = init_x_traj
+            self.committed_u_traj = init_u_traj 
+
         # try updating the committed trajectory
-        print("current_time_idx", self.current_time_idx, "next_event_time", self.next_event_time/self.dt)
         if self.current_time_idx > self.next_event_time/self.dt:
-            print("Event triggered, generating new candidate trajectory")
+            #print("Event triggered, generating new candidate trajectory")
             candidate_x_traj = self._generate_candidate_trajectory(goal)
             if self._is_candidate_valid(candidate_x_traj, nearest_obs):
+                print("Candidate trajectory is valid")
                 # If the candidate trajectory is valid, update the committed trajectory
                 self._update_committed_trajectory()
         
         if self.current_time_idx < self.nominal_horizon/self.dt:
             # Use the committed trajectory for the next control input
+            #print("in nominal: control input", self.committed_u_traj[self.current_time_idx])
+            #print("in nominal: control input", self.nominal_controller(self.robot.X, goal))
             return self.committed_u_traj[self.current_time_idx] if self.nominal_controller is None else self.nominal_controller(self.robot.X, goal)
         else:
+            #print("backup: control input", self.backup_controller(self.robot.X))
             return self.committed_u_traj[self.current_time_idx] if self.backup_controller is None else self.backup_controller(self.robot.X)
