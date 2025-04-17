@@ -123,8 +123,8 @@ class Gatekeeper:
         if self.nominal_controller is None and self.backup_controller is None:
             # if no controllers are provided, return current candidate trajectory
             # in this case, the nominal trajectory is assumed to be externally updated
-            nominal_x_traj = self.nominal_x_traj[:discounted_nominal_horizon//self.dt]
-            nominal_u_traj = self.nominal_u_traj[:discounted_nominal_horizon//self.dt]
+            nominal_x_traj = self.nominal_x_traj[:int(discounted_nominal_horizon//self.dt)]
+            nominal_u_traj = self.nominal_u_traj[:int(discounted_nominal_horizon//self.dt)]
         else:
             # Generate the candidate trajectory using the nominal and backup controllers
             current_state = self.robot.X
