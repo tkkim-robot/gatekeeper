@@ -158,10 +158,28 @@ if __name__ == "__main__":
     tf = 100
     num_steps = int(tf / dt)
 
-    # Define an obstacle for visualization.
-    obstacle_center = np.array([5.0, 5.0])
-    obstacle_radius = 1.0
-    nearest_obs = np.array([[5, 5, 1]])
+    # Define multiple moving obstacles.
+    obstacles = []
+    num_obs = 20
+    np.random.seed(0)
+    for i in range(num_obs):
+        center = np.random.uniform(2, 10, size=2)
+        radius = np.random.uniform(0.2, 0.8)
+        # absolute velocity is in 0.05 to 0.1, but random sign
+        velocity = np.random.uniform(0.05, 0.1, size=2) * \
+            np.random.choice([-1, 1], size=2)
+        # horizontally stack the information in numpy array
+        obstacles.append(np.hstack((center, radius, velocity)))
+    obstacles = np.array(obstacles)
+        
+    # Create and add obstacle patches.
+    obstacle_patches = []
+    for obs in obstacles:
+        patch = plt.Circle((obs[0], obs[1]), obs[2],
+                           edgecolor='black', facecolor='gray', linestyle='-')
+        ax.add_patch(patch)
+        obstacle_patches.append(patch)
+
 
     # Set start and goal positions.
     initial_state = np.array([0.0, 0.0, 0.0, 0.0]).reshape(-1, 1)
@@ -186,18 +204,17 @@ if __name__ == "__main__":
     # Simulation loop.
     for step in range(num_steps):
         # Get control input from Gatekeeper.
-        u = gk.solve_control_problem(robot.X, control_ref, nearest_obs)
+        u = gk.solve_control_problem(robot.X, control_ref, obstacles)
         # Update the robot's state.
         robot.step(u)
         # Render the updated robot state.
         robot.render_plot()
         
-        # (Optional) Draw the obstacle once. To avoid redrawing multiple times, we draw it in the first iteration.
-        if step == 0:
-            obstacle_patch = plt.Circle((obstacle_center[0], obstacle_center[1]), obstacle_radius,
-                                          edgecolor='red', facecolor='none', linestyle='--')
-            ax.add_patch(obstacle_patch)
-        
+        # Move and redraw obstacles.
+        for idx, obs in enumerate(obstacles):
+            obs[0:2] += obs[3:5] * dt
+            obstacle_patches[idx].center = (obs[0], obs[1])
+
         plt.pause(0.001)
         fig.canvas.draw()
         fig.canvas.flush_events()

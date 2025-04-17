@@ -55,7 +55,7 @@ class Gatekeeper:
 
         self.last_event_time = 0.0
         self.next_event_time = self.last_event_time
-        self.current_time_idx = 0
+        self.current_time_idx = backup_horizon / dt # start from backup trajectory. If the initial canddidate traj is valid, it will be updated to 0
 
         # Initialize the committed trajectory
         self.committed_x_traj = None
@@ -193,7 +193,7 @@ class Gatekeeper:
 
         # try updating the committed trajectory
         if self.current_time_idx > self.next_event_time/self.dt:
-            #print("Event triggered, generating new candidate trajectory")
+            print("Event triggered, generating new candidate trajectory")
             candidate_x_traj = self._generate_candidate_trajectory(goal)
             if self._is_candidate_valid(candidate_x_traj, nearest_obs):
                 print("Candidate trajectory is valid")
