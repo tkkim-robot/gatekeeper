@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.animation as animation
 
 """
 Created on April 14th, 2025
@@ -157,6 +158,8 @@ if __name__ == "__main__":
     dt = 0.05
     tf = 100
     num_steps = int(tf / dt)
+    writer = animation.FFMpegWriter(fps=int(1/dt))
+    writer.setup(fig, "simulation.mp4", dpi=100)
 
     # Define multiple moving obstacles.
     obstacles = []
@@ -166,7 +169,7 @@ if __name__ == "__main__":
         center = np.random.uniform(2, 10, size=2)
         radius = np.random.uniform(0.2, 0.8)
         # absolute velocity is in 0.05 to 0.1, but random sign
-        velocity = np.random.uniform(0.05, 0.1, size=2) * \
+        velocity = np.random.uniform(0.15, 0.3, size=2) * \
             np.random.choice([-1, 1], size=2)
         # horizontally stack the information in numpy array
         obstacles.append(np.hstack((center, radius, velocity)))
@@ -184,6 +187,9 @@ if __name__ == "__main__":
     # Set start and goal positions.
     initial_state = np.array([0.0, 0.0, 0.0, 0.0]).reshape(-1, 1)
     goal = np.array([10.0, 10.0]).reshape(-1, 1)
+
+    # plot goal position
+    ax.plot(goal[0], goal[1], 'gs', markersize=10)
 
     # Create robot_spec and initialize the double integrator.
     robot_spec = {"model": "DoubleIntegrator2D",
@@ -218,6 +224,8 @@ if __name__ == "__main__":
         plt.pause(0.001)
         fig.canvas.draw()
         fig.canvas.flush_events()
+        writer.grab_frame()
     
+    writer.finish()
     plt.ioff()
     plt.show()

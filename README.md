@@ -6,17 +6,33 @@ Install packages
 python -m pip install numpy scipy matplotlib
 ```
 
+### Run basic test
+```python
+python test.py
+```
+
+The sample results from the basic example:
+
+|      Navigation with gatekeeper            |
+| :-------------------------------: |
+|  <img src="https://github.com/user-attachments/assets/797fa7c2-8e8e-46d0-81ab-a4b47fdd8ec5"  height="350px"> |
+
+### How to use it
+
 ```python
 from gatekeeper import Gatekeeper
-from robots.robot import BaseRobot  # your base robot class
 
-# Example use within the tracking module
 class TrackingController:
     def __init__(self, robot):
         self.robot = robot
         # Instead of using a pre-existing positional controller,
         # instantiate the gatekeeper controller.
-        self.tracking_controller = Gatekeeper(robot, dt=0.05, candidate_horizon=2.0, event_offset=0.05)
+        self.gk = Gatekeeper(robot, dt=0.05, nominal_horizon=2.0, backup_horizon=4.0, event_offset=1.0)
+
+        # define your nominal and backup controller
+        self.gk._set_nominal_controller(robot.robot.nominal_input)
+        self.gk._set_backup_controller(robot.robot.stop)
+
 
     def solve_control_problem(self, current_state, current_time):
         # The gatekeeper's solve_control_problem is called at each time step.
