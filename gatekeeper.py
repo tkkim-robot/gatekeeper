@@ -49,13 +49,15 @@ class Gatekeeper:
         self.nominal_horizon = nominal_horizon
         self.backup_horizon = backup_horizon
         self.event_offset = event_offset
+        self.horizon_discount = dt * 5
+
 
         self.nominal_controller = None
         self.backup_controller = None
 
-        self.last_event_time = 0.0
-        self.next_event_time = self.last_event_time
+        self.next_event_time = 0.0
         self.current_time_idx = backup_horizon / dt # start from backup trajectory. If the initial canddidate traj is valid, it will be updated to 0
+        self.committed_horizon = 0.0
 
         # Initialize the committed trajectory
         self.committed_x_traj = None
@@ -73,13 +75,13 @@ class Gatekeeper:
     def _set_backup_controller(self, backup_controller):
         self.backup_controller = backup_controller
 
-    def _set_candidate_trajectory(self, candidate_x_traj, candidate_u_traj):
+    def _set_nominal_trajectory(self, nominal_x_traj, nominal_u_traj):
         """
-        Set the candidate trajectory for external trajectory mode.
+        Set the nominal trajectory for external trajectory mode.
         ex) using MPC-based controller
         """
-        self.candidate_x_traj = candidate_x_traj
-        self.candidate_u_traj = candidate_u_traj
+        self.nominal_x_traj = nominal_x_traj
+        self.nominal_u_traj = nominal_u_traj
 
     def _generate_nominal_trajectory(self, initial_state, goal, horizon):
         # Create the time evaluation points.
@@ -117,25 +119,26 @@ class Gatekeeper:
         u_traj = np.array(u_traj)
         return x_traj, u_traj
         
-    def _generate_candidate_trajectory(self, goal):
+    def _generate_candidate_trajectory(self, goal, discounted_nominal_horizon):
         if self.nominal_controller is None and self.backup_controller is None:
             # if no controllers are provided, return current candidate trajectory
-            # in this case, the candidate trajectory is assumed to be externally updated
-            return self.candidate_x_traj
+            # in this case, the nominal trajectory is assumed to be externally updated
+            nominal_x_traj = self.nominal_x_traj[:discounted_nominal_horizon//self.dt]
+            nominal_u_traj = self.nominal_u_traj[:discounted_nominal_horizon//self.dt]
         else:
             # Generate the candidate trajectory using the nominal and backup controllers
             current_state = self.robot.X
+            nominal_x_traj, nominal_u_traj = self._generate_nominal_trajectory(current_state, goal, discounted_nominal_horizon)
 
-            nominal_x_traj, nominal_u_traj = self._generate_nominal_trajectory(current_state, goal, self.nominal_horizon)
-            state_at_backup = nominal_x_traj[-1]  # last state of the nominal trajectory
-            backup_x_traj, backup_u_traj = self._generate_backup_trajectory(state_at_backup, goal, self.backup_horizon)
+        state_at_backup = nominal_x_traj[-1]  # last state of the nominal trajectory
+        backup_x_traj, backup_u_traj = self._generate_backup_trajectory(state_at_backup, goal, self.backup_horizon)
 
-            self.candidate_x_traj = np.vstack((nominal_x_traj, backup_x_traj))
-            self.candidate_u_traj = np.vstack((nominal_u_traj, backup_u_traj))
-            # print("nominal_x_traj", nominal_x_traj)
-            # print("backup_x_traj", backup_x_traj)
-            # print("candidate_x_traj", self.candidate_x_traj)
-            return self.candidate_x_traj
+        self.candidate_x_traj = np.vstack((nominal_x_traj, backup_x_traj))
+        self.candidate_u_traj = np.vstack((nominal_u_traj, backup_u_traj))
+        # print("nominal_x_traj", nominal_x_traj)
+        # print("backup_x_traj", backup_x_traj)
+        # print("candidate_x_traj", self.candidate_x_traj)
+        return self.candidate_x_traj
 
     def _is_collision(self, state, obs):
         # obs has x, y, radius, check collision use two norm
@@ -159,14 +162,15 @@ class Gatekeeper:
                     return False
         return True
 
-    def _update_committed_trajectory(self):
+    def _update_committed_trajectory(self, discounted_nominal_horizon):
         """
         Update the committed trajectory with the candidate trajectory.
         """
         self.committed_x_traj = self.candidate_x_traj
         self.committed_u_traj = self.candidate_u_traj
-        self.next_event_time = self.nominal_horizon + self.event_offset
+        self.next_event_time = self.event_offset
         self.current_time_idx = 0
+        self.committed_horizon = discounted_nominal_horizon
 
 
     def solve_control_problem(self, robot_state, control_ref, nearest_obs):
@@ -193,14 +197,20 @@ class Gatekeeper:
 
         # try updating the committed trajectory
         if self.current_time_idx > self.next_event_time/self.dt:
-            print("Event triggered, generating new candidate trajectory")
-            candidate_x_traj = self._generate_candidate_trajectory(goal)
-            if self._is_candidate_valid(candidate_x_traj, nearest_obs):
-                print("Candidate trajectory is valid")
-                # If the candidate trajectory is valid, update the committed trajectory
-                self._update_committed_trajectory()
+            #print("Event triggered, generating new candidate trajectory")
+
+            for i in range(int(self.nominal_horizon//self.horizon_discount)):
+                # discount the nominal horizon
+                discounted_nominal_horizon = self.nominal_horizon - i * self.horizon_discount
+                # Generate the candidate trajectory
+                candidate_x_traj = self._generate_candidate_trajectory(goal, discounted_nominal_horizon)
+                # Check if the candidate trajectory is valid
+                if self._is_candidate_valid(candidate_x_traj, nearest_obs):
+                    #print("Candidate trajectory is valid")
+                    self._update_committed_trajectory(discounted_nominal_horizon)
+                    break
         
-        if self.current_time_idx < self.nominal_horizon/self.dt:
+        if self.current_time_idx < self.committed_horizon/self.dt:
             # Use the committed trajectory for the next control input
             #print("in nominal: control input", self.committed_u_traj[self.current_time_idx])
             #print("in nominal: control input", self.nominal_controller(self.robot.X, goal))
