@@ -1,5 +1,7 @@
 # gatekeeper
 
+This repository is archived now. Please see [safe_control](https://github.com/tkkim-robot/safe_control) for more details.
+
 ### Installation
 Install packages
 ```bash
